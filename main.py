@@ -4,7 +4,7 @@ from typing import Optional
 import os
 import tempfile
 from processing import run_full_pipeline, extract_article
-from api_clients import summarize_text, extract_keywords, transcribe_audio_groq, extract_text_from_pdf, extract_text_from_docx, transcribe_audio_local
+from api_clients import summarize_text, extract_keywords, transcribe_audio_groq, extract_text_from_pdf, extract_text_from_docx
 import sys
 
 
@@ -52,8 +52,8 @@ async def analyze_file(file: UploadFile = File(...), context: Optional[str] = Fo
         print(f"Processing file: {filename}, Content-Type: {file.content_type}")
 
         if file.content_type.startswith("video") or file.content_type.startswith("audio"):
-            # Use local Whisper for audio/video
-            transcription = transcribe_audio_local(tmp_path)
+            # Use Groq Whisper for audio/video
+            transcription = transcribe_audio_groq(tmp_path)
             summary = summarize_text(transcription)
             keywords = extract_keywords(summary)
         

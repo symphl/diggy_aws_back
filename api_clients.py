@@ -5,7 +5,6 @@ from serpapi import GoogleSearch
 from dotenv import load_dotenv
 import PyPDF2
 import docx
-import whisper
 import tempfile
 
 load_dotenv()
@@ -16,29 +15,7 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_HEADERS = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
-# Initialize Whisper model lazily or globally
-# For better performance on repeated calls, global is better, but might consume memory on startup.
-# We'll load it lazily or just let it load when needed for now to avoid blocking startup if not used.
-WHISPER_MODEL = None
 
-def get_whisper_model():
-    global WHISPER_MODEL
-    if WHISPER_MODEL is None:
-        print("Loading Whisper model (base)...")
-        WHISPER_MODEL = whisper.load_model("base")
-    return WHISPER_MODEL
-
-def transcribe_audio_local(file_path):
-    """
-    Transcribe audio using local Whisper model.
-    """
-    try:
-        model = get_whisper_model()
-        result = model.transcribe(file_path)
-        return result["text"]
-    except Exception as e:
-        print(f"Whisper transcription error: {e}")
-        return f"Error transcribing audio: {e}"
 
 def extract_text_from_pdf(file_path):
     """
