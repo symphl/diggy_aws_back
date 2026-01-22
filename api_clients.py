@@ -3,9 +3,6 @@ import requests
 import json
 from serpapi import GoogleSearch
 from dotenv import load_dotenv
-import PyPDF2
-import docx
-import tempfile
 
 load_dotenv()
 
@@ -15,53 +12,23 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_HEADERS = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
 
-
-
-def extract_text_from_pdf(file_path):
-    """
-    Extract text from a PDF file.
-    """
-    try:
-        text = ""
-        with open(file_path, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)
-            for page in reader.pages:
-                text += page.extract_text() + "\n"
-        return text.strip()
-    except Exception as e:
-        print(f"PDF extraction error: {e}")
-        return ""
-
-def extract_text_from_docx(file_path):
-    """
-    Extract text from a DOCX file.
-    """
-    try:
-        doc = docx.Document(file_path)
-        text = "\n".join([para.text for para in doc.paragraphs])
-        return text.strip()
-    except Exception as e:
-        print(f"DOCX extraction error: {e}")
-        return ""
-
-
-def transcribe_audio_groq(file_path):
-    url = "https://api.groq.com/openai/v1/audio/transcriptions"
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    with open(file_path, "rb") as f:
-        files = {"file": (os.path.basename(file_path), f), "model": (None, "whisper-large-v3")}
-        response = requests.post(url, headers=headers, files=files)
-    if response.status_code == 200:
-        return response.json().get("text", "")
-    return f"Error: {response.text}"
-
-
 def fetch_top_news(query, serp_api_key, num_results=6):
     """Fetches top news articles using SerpApi."""
     print(f"Attempting to fetch news for query: '{query}'...")
+    # Append major news sources to query to avoid local/irrelevant results
+    # Using 'site:' operator within Google News search to prioritize top global outlets
+    # Excluded hard paywalls (WSJ, Bloomberg, NYT) to improve extraction success
+    trusted_sites = (
+        "site:bbc.com OR site:cnn.com OR site:reuters.com OR site:theguardian.com OR "
+        "site:cnbc.com OR site:apnews.com OR site:aljazeera.com OR site:npr.org OR "
+        "site:cbsnews.com OR site:abcnews.go.com OR site:nbcnews.com OR site:usatoday.com OR "
+        "site:politico.com OR site:foxnews.com"
+    )
+    refined_query = f"{query} ({trusted_sites})"
+
     params = {
         "engine": "google_news",
-        "q": query,
+        "q": refined_query,
         "gl": "us",
         "hl": "en",
         "api_key": serp_api_key
@@ -73,16 +40,25 @@ def fetch_top_news(query, serp_api_key, num_results=6):
             print("SerpApi news fetch: successful")
             return results["news_results"][:num_results], None
         else:
-            error_message = results.get("error", "No news_results found.")
-            print(f"SerpApi news fetch: fail. Error: {error_message}")
-            return [], error_message
+            # Fallback: if restricted search fails, try original query without site filters
+            print("Restricted search yielded no results. Retrying with original query...")
+            params["q"] = query
+            search = GoogleSearch(params)
+            results = search.get_dict()
+            if "news_results" in results and results["news_results"]:
+                print("SerpApi fallback news fetch: successful")
+                return results["news_results"][:num_results], None
+            else:
+                error_message = results.get("error", "No news_results found.")
+                print(f"SerpApi news fetch: fail. Error: {error_message}")
+                return [], error_message
     except Exception as e:
         print(f"SerpApi news fetch: fail. An exception occurred: {e}")
         return [], str(e)
 
 def debug_groq_request(payload, timeout=30):
     """
-    Send payload to Groq endpoint, print debug info on failure and return parsed JSON on success.
+    Send payload to Groq endpoint, print debug info on failure and return parsed parsed JSON on success.
     """
     if not GROQ_API_KEY:
         print("debug_groq_request: GROQ_API_KEY not set.")
@@ -191,17 +167,20 @@ def summarize_all_articles(articles, model="llama-3.1-8b-instant"):
     combined = "\n\n".join(snippets)[:4000]
 
     prompt = (
-        "Synthesize these short article summaries. Output:\n"
-        "- Headline (one line)\n- 4-6 bullet points\n- One-sentence takeaway\n\n"
+        "Synthesize these short article summaries into a structured news summary following this exact format:\n\n"
+        "1. A contextual introduction paragraph setting the scene for about 100 words.\n"
+        "2. 3-4 bullet points highlighting the most important details.\n"
+        "3. A concluding paragraph summarizing the overall implication.\n\n"
+        "IMPORTANT: Do NOT use headings like 'Contextual Intro' or 'Key Points'. Just provide the text directly.\n\n"
         f"{combined}"
     )
 
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": "You are an unbiased news synthesizer."},
+        "messages": [{"role": "system", "content": "You are an unbiased news synthesizer. You provide clean, header-free summaries."},
                      {"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 500
+        "max_tokens": 600
     }
 
     resp = debug_groq_request(payload, timeout=30)
@@ -403,9 +382,10 @@ def extract_perspectives_from_articles(articles, model="llama-3.1-8b-instant"):
         "humanitarian concerns, legal/constitutional issues, technological implications, "
         "ethnic/religious tension, labor/workforce stress). For each perspective, output:\n\n"
         "1) Perspective name (one short phrase)\n"
-        "2) 3-4 line concise summary explaining how and why this perspective appears in the reporting\n"
-        "3) If any of the articles mention or support this perspective, list the article URLs (comma separated). If none, write 'None'.\n\n"
-        "Return valid JSON only. The output must be a JSON array of objects with keys: perspective, summary, articles. "
+        "2) 3-4 line concise summary explaining 'what is this perspective' in the context of the news\n"
+        "3) An 'interesting_fact' related to this specific perspective (a statistic, historical precedent, or surprising detail)\n"
+        "4) If any of the articles mention or support this perspective, include their URLs in a list.\n\n"
+        "Return valid JSON only. The output must be a JSON array of objects with keys: perspective, summary, interesting_fact, articles (array of strings). "
         "Do not include markdown formatting, code blocks, or conversational text.\n\n"
         "Articles:\n\n" + "\n\n---\n\n".join(snippets)
     )
@@ -443,12 +423,14 @@ def extract_perspectives_from_articles(articles, model="llama-3.1-8b-instant"):
                 out.append({
                     "perspective": p.get("perspective") or p.get("name") or "",
                     "summary": p.get("summary") or "",
+                    "interesting_fact": p.get("interesting_fact") or "",
                     "articles": p.get("articles") or []
                 })
             return out
         except Exception:
-            # Fallback: return the raw text as a single perspective entry
-            return [{"perspective": "Extracted perspectives", "summary": raw, "articles": []}]
+            # Fallback: return the raw text, and attribute all articles to it so it isn't hidden
+            all_urls = [a.get("url") for a in articles if a.get("url")]
+            return [{"perspective": "Analysis", "summary": raw, "interesting_fact": "", "articles": all_urls}]
     except Exception:
         return []
 
@@ -486,4 +468,3 @@ def answer_followup(question, context=None, model="llama-3.1-8b-instant"):
         return resp["choices"][0]["message"]["content"].strip()
     except Exception:
         return "Error: Failed to parse answer."
-
