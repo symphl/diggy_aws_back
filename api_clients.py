@@ -129,6 +129,7 @@ def summarize_text(text, model="llama-3.1-8b-instant"):
     prompt = (
         "You are a neutral news summarizer. Provide a concise factual summary under 80 words. "
         "Include main event, key people involved, and outcome. No opinions.\n\n"
+        "Give only bullet points.\n\n"
         f"Article:\n{safe_text}"
     )
 
